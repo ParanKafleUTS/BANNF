@@ -30,6 +30,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 from torchvision import models, transforms
@@ -63,6 +65,68 @@ MODEL_REGISTRY = {
     "mobilenet": "MobileNetV3_banana_ripeness.pth",
     "resnet": "ResNet50_banana_ripeness.pth",
 }
+
+# Recipe suggestions keyed by ripeness class
+RECIPES: dict[str, dict] = {
+    "freshripe": {
+        "status": "Perfect for eating right now!",
+        "edible": True,
+        "recipes": [
+            {"name": "Banana Smoothie",    "desc": "Blend with milk, honey and a pinch of cinnamon."},
+            {"name": "Banana on Toast",    "desc": "Slice over sourdough toast with peanut butter."},
+            {"name": "Banana Yoghurt Bowl","desc": "Top Greek yoghurt with banana slices and granola."},
+            {"name": "Banana Oatmeal",     "desc": "Stir sliced banana into warm oats with maple syrup."},
+        ],
+    },
+    "freshunripe": {
+        "status": "Let it ripen 1-2 more days, or use in savoury dishes.",
+        "edible": True,
+        "recipes": [
+            {"name": "Green Banana Curry",   "desc": "Simmer in coconut milk with curry leaves and spices."},
+            {"name": "Banana Chips",         "desc": "Slice thinly, bake or air-fry with salt and turmeric."},
+            {"name": "Raw Banana Stir-Fry",  "desc": "Sauté with mustard seeds, chilli and grated coconut."},
+            {"name": "Green Banana Porridge","desc": "Boil and mash with coconut milk for a savoury porridge."},
+        ],
+    },
+    "ripe": {
+        "status": "Great flavour — ideal for most recipes.",
+        "edible": True,
+        "recipes": [
+            {"name": "Banana Smoothie",    "desc": "Blend with frozen berries and almond milk."},
+            {"name": "Banana Split",       "desc": "Halve and top with ice cream and hot fudge sauce."},
+            {"name": "Banana Pudding",     "desc": "Layer with vanilla custard and crushed biscuits."},
+            {"name": "Caramelised Banana", "desc": "Pan-fry in butter and brown sugar; serve with ice cream."},
+        ],
+    },
+    "overripe": {
+        "status": "Very sweet — perfect for baking and frozen desserts.",
+        "edible": True,
+        "recipes": [
+            {"name": "Banana Bread",    "desc": "Classic moist loaf with walnuts baked at 180 °C."},
+            {"name": "Banana Muffins",  "desc": "Quick muffins with chocolate chips ready in 25 minutes."},
+            {"name": "Banana Pancakes", "desc": "Mashed banana, eggs and oats — fluffy 3-ingredient pancakes."},
+            {"name": "Banana Ice Cream","desc": "Blend frozen chunks for a one-ingredient nice-cream."},
+        ],
+    },
+    "rotten": {
+        "status": "Not safe to eat. Please discard or compost.",
+        "edible": False,
+        "recipes": [],
+    },
+    "unripe": {
+        "status": "Too firm to eat raw — allow to ripen 2-3 more days.",
+        "edible": True,
+        "recipes": [
+            {"name": "Banana Chips",       "desc": "Thinly slice, toss in oil, bake at 160 °C until golden."},
+            {"name": "Raw Banana Sabzi",   "desc": "Indian stir-fry with cumin, turmeric and coriander."},
+            {"name": "Plantain-style Fry", "desc": "Shallow-fry rounds until golden; season with chilli salt."},
+            {"name": "Banana Stew",        "desc": "Simmer in a light coconut and tomato stew."},
+        ],
+    },
+}
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
 
 # Inference transforms (no augmentation; same as val/test in training)
 INFERENCE_TRANSFORMS = transforms.Compose(
@@ -201,6 +265,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 
 # ---------------------------------------------------------------------------
 # Pydantic response schemas
@@ -224,6 +290,18 @@ class ModelsResponse(BaseModel):
     available_models: list[str]
     default_model: str
     classes: list[str]
+
+
+class RecipeItem(BaseModel):
+    name: str
+    desc: str
+
+
+class RecipesResponse(BaseModel):
+    ripeness_class: str
+    status: str
+    edible: bool
+    recipes: list[RecipeItem]
 
 
 # ---------------------------------------------------------------------------
@@ -354,5 +432,35 @@ async def predict(
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     return _predict(contents, model)
+
+
+@app.get("/ui", tags=["UI"], include_in_schema=False)
+def web_ui():
+    """Serve the web interface for banana ripeness identification."""
+    html_path = os.path.join(STATIC_DIR, "index.html")
+    if not os.path.exists(html_path):
+        raise HTTPException(status_code=404, detail="Web UI not found.")
+    return FileResponse(html_path, media_type="text/html")
+
+
+@app.get("/recipes/{class_name}", response_model=RecipesResponse, tags=["Recipes"])
+def get_recipes(class_name: str):
+    """
+    Return recipe suggestions for a given banana ripeness class.
+
+    **class_name** must be one of: freshripe, freshunripe, ripe, overripe, rotten, unripe
+    """
+    if class_name not in RECIPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown class {class_name!r}. Choose from: {list(RECIPES.keys())}",
+        )
+    data = RECIPES[class_name]
+    return RecipesResponse(
+        ripeness_class=class_name,
+        status=data["status"],
+        edible=data["edible"],
+        recipes=[RecipeItem(**r) for r in data["recipes"]],
+    )
 
 
