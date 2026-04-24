@@ -15,11 +15,16 @@ Endpoints:
     GET  /            – health check
     GET  /models      – list available models
     POST /predict     – classify an uploaded image
+
+ClearML experiment tracking is enabled automatically when ClearML credentials
+are configured (see CLEARML_TRACKING.md).  The API degrades gracefully when
+ClearML is unavailable or not configured.
 """
 
 import io
+import itertools
 import os
-from functools import lru_cache
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import torch
@@ -30,6 +35,20 @@ from pydantic import BaseModel
 from torchvision import models, transforms
 
 # ---------------------------------------------------------------------------
+# ClearML (optional – degrades gracefully when not configured)
+# ---------------------------------------------------------------------------
+
+try:
+    from clearml import Task as ClearMLTask
+
+    _CLEARML_AVAILABLE = True
+except ImportError:
+    _CLEARML_AVAILABLE = False
+
+_clearml_task = None
+_prediction_counter = itertools.count(start=1)
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -38,7 +57,7 @@ NUM_CLASSES = len(CLASS_NAMES)
 INPUT_SIZE = 224
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 
-# Map of friendly model keys → (filename, torchvision factory)
+# Map of friendly model keys → filename
 MODEL_REGISTRY = {
     "efficientnet": "EfficientNetB0_banana_ripeness.pth",
     "mobilenet": "MobileNetV3_banana_ripeness.pth",
@@ -96,7 +115,6 @@ _BUILDERS = {
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-@lru_cache(maxsize=None)
 def load_model(model_key: str) -> nn.Module:
     """Load and cache a model from disk."""
     if model_key not in MODEL_REGISTRY:
@@ -117,6 +135,57 @@ def load_model(model_key: str) -> nn.Module:
     return net
 
 
+# Use a module-level cache dict instead of lru_cache so it can be populated
+# inside the lifespan handler.
+_model_cache: dict[str, nn.Module] = {}
+
+
+def get_model(model_key: str) -> nn.Module:
+    if model_key not in _model_cache:
+        _model_cache[model_key] = load_model(model_key)
+    return _model_cache[model_key]
+
+
+# ---------------------------------------------------------------------------
+# Application lifespan – ClearML init / teardown
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # noqa: ARG001
+    """Start ClearML Task on startup; close it on shutdown."""
+    global _clearml_task  # noqa: PLW0603
+
+    if _CLEARML_AVAILABLE:
+        try:
+            _clearml_task = ClearMLTask.init(
+                project_name="Banana Ripeness API",
+                task_name="Inference Session",
+                task_type=ClearMLTask.TaskTypes.inference,
+                reuse_last_task_id=False,
+                auto_connect_frameworks=False,
+            )
+            # Log static configuration as hyperparameters
+            _clearml_task.set_parameters_as_dict(
+                {
+                    "model_registry": list(MODEL_REGISTRY.keys()),
+                    "num_classes": NUM_CLASSES,
+                    "class_names": CLASS_NAMES,
+                    "input_size": INPUT_SIZE,
+                    "device": str(_DEVICE),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            # ClearML misconfiguration must not break the API
+            print(f"[ClearML] Could not initialise task: {exc}")
+            _clearml_task = None
+
+    yield  # application runs here
+
+    if _clearml_task is not None:
+        _clearml_task.close()
+
+
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
@@ -129,6 +198,7 @@ app = FastAPI(
         "ParanKafleUTS/AI_Matrix_banana_ripness."
     ),
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -147,6 +217,7 @@ class PredictionResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     device: str
+    clearml_tracking: bool
 
 
 class ModelsResponse(BaseModel):
@@ -167,7 +238,7 @@ def _predict(image_bytes: bytes, model_key: str) -> PredictionResponse:
         raise HTTPException(status_code=400, detail=f"Cannot decode image: {exc}") from exc
 
     try:
-        net = load_model(model_key)
+        net = get_model(model_key)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -182,12 +253,52 @@ def _predict(image_bytes: bytes, model_key: str) -> PredictionResponse:
     pred_idx = probs.index(max(probs))
     class_probs = {name: round(p, 6) for name, p in zip(CLASS_NAMES, probs)}
 
-    return PredictionResponse(
+    result = PredictionResponse(
         model_used=model_key,
         predicted_class=CLASS_NAMES[pred_idx],
         confidence=round(probs[pred_idx], 6),
         class_probabilities=class_probs,
     )
+
+    # ---- ClearML logging ------------------------------------------------
+    if _clearml_task is not None:
+        iteration = next(_prediction_counter)
+        logger = _clearml_task.get_logger()
+
+        # Confidence of the winning class
+        logger.report_scalar(
+            title="Inference / Confidence",
+            series=model_key,
+            value=result.confidence,
+            iteration=iteration,
+        )
+
+        # Full probability distribution
+        for cls_name, prob in class_probs.items():
+            logger.report_scalar(
+                title="Inference / Class Probabilities",
+                series=cls_name,
+                value=prob,
+                iteration=iteration,
+            )
+
+        # Predicted class encoded as its index (for numeric plotting)
+        logger.report_scalar(
+            title="Inference / Predicted Class Index",
+            series=model_key,
+            value=pred_idx,
+            iteration=iteration,
+        )
+
+        # Human-readable log line
+        logger.report_text(
+            f"[{iteration}] model={model_key} | "
+            f"class={result.predicted_class} | "
+            f"confidence={result.confidence:.4f}"
+        )
+    # ---------------------------------------------------------------------
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +309,11 @@ def _predict(image_bytes: bytes, model_key: str) -> PredictionResponse:
 @app.get("/", response_model=HealthResponse, tags=["Health"])
 def health_check():
     """Return service health and compute device."""
-    return HealthResponse(status="ok", device=str(_DEVICE))
+    return HealthResponse(
+        status="ok",
+        device=str(_DEVICE),
+        clearml_tracking=_clearml_task is not None,
+    )
 
 
 @app.get("/models", response_model=ModelsResponse, tags=["Models"])
@@ -226,6 +341,7 @@ async def predict(
     - **model**: one of `efficientnet` (default), `mobilenet`, `resnet`
 
     Returns the predicted class, confidence, and full probability distribution.
+    Each call is logged to ClearML when tracking is active.
     """
     if model not in MODEL_REGISTRY:
         raise HTTPException(
@@ -238,3 +354,5 @@ async def predict(
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     return _predict(contents, model)
+
+
