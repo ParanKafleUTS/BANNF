@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Banana Ripeness Identifier 🍌</title>
+  <style>
+    /* ---------- Reset & base ---------- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #fff9e6 0%, #fffde7 60%, #f0f4c3 100%);
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ---------- Header ---------- */
+    header {
+      width: 100%;
+      background: linear-gradient(90deg, #f9a825, #ffd54f);
+      padding: 1.2rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+    header h1 { font-size: 1.6rem; font-weight: 700; color: #3e2723; }
+    header span { font-size: 2rem; }
+
+    /* ---------- Main card ---------- */
+    main {
+      width: 100%;
+      max-width: 860px;
+      padding: 2rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 1.75rem 2rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .card h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #5d4037;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ---------- Drop zone ---------- */
+    #drop-zone {
+      border: 2.5px dashed #fbc02d;
+      border-radius: 12px;
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      background: #fffde7;
+    }
+    #drop-zone.dragover { background: #fff9c4; border-color: #f9a825; }
+    #drop-zone p { color: #888; font-size: 0.95rem; margin-top: 0.4rem; }
+    #drop-zone .icon { font-size: 3rem; }
+    #file-input { display: none; }
+
+    /* ---------- Preview ---------- */
+    #preview-wrap {
+      display: none;
+      margin-top: 1rem;
+      text-align: center;
+    }
+    #preview-wrap img {
+      max-height: 260px;
+      max-width: min(100%, 600px);
+      border-radius: 10px;
+      object-fit: contain;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+    }
+    #preview-wrap button {
+      margin-top: 0.6rem;
+      background: none;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 0.3rem 0.75rem;
+      cursor: pointer;
+      font-size: 0.82rem;
+      color: #666;
+    }
+    #preview-wrap button:hover { background: #f5f5f5; }
+
+    /* ---------- Controls row ---------- */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 1rem;
+    }
+    label[for="model-select"] { font-size: 0.9rem; color: #555; white-space: nowrap; }
+    #model-select {
+      padding: 0.45rem 0.75rem;
+      border: 1.5px solid #fbc02d;
+      border-radius: 8px;
+      background: #fffde7;
+      font-size: 0.9rem;
+      color: #333;
+      cursor: pointer;
+    }
+    #model-select:focus { outline: 2px solid #f9a825; }
+
+    #analyse-btn {
+      margin-left: auto;
+      padding: 0.65rem 2rem;
+      background: linear-gradient(90deg, #f9a825, #ffd54f);
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #3e2723;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      box-shadow: 0 2px 6px rgba(249,168,37,0.4);
+    }
+    #analyse-btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+    #analyse-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* ---------- Spinner ---------- */
+    #spinner {
+      display: none;
+      width: 40px; height: 40px;
+      border: 4px solid #fbc02d;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 1.5rem auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---------- Result card ---------- */
+    #result-card { display: none; }
+
+    .ripeness-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1.2rem;
+      border-radius: 999px;
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+    }
+
+    /* class-specific badge colours */
+    .badge-freshripe    { background: #e8f5e9; color: #2e7d32; border: 2px solid #66bb6a; }
+    .badge-freshunripe  { background: #f1f8e9; color: #558b2f; border: 2px solid #9ccc65; }
+    .badge-ripe         { background: #fffde7; color: #f57f17; border: 2px solid #fbc02d; }
+    .badge-overripe     { background: #fff8e1; color: #e65100; border: 2px solid #ffa726; }
+    .badge-rotten       { background: #fbe9e7; color: #b71c1c; border: 2px solid #ef5350; }
+    .badge-unripe       { background: #f3e5f5; color: #6a1b9a; border: 2px solid #ab47bc; }
+
+    .confidence-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .confidence-bar-wrap {
+      flex: 1;
+      background: #eee;
+      border-radius: 999px;
+      height: 10px;
+      overflow: hidden;
+    }
+    .confidence-bar {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #f9a825, #ffd54f);
+      transition: width 0.6s ease;
+    }
+    .confidence-label { font-size: 0.9rem; color: #555; min-width: 3rem; text-align: right; }
+
+    /* ---------- Probability table ---------- */
+    details { margin-top: 0.5rem; }
+    details summary {
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: #888;
+      user-select: none;
+    }
+    details summary:hover { color: #555; }
+    .prob-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+    .prob-item { font-size: 0.82rem; }
+    .prob-item .prob-label {
+      display: flex;
+      justify-content: space-between;
+      color: #666;
+      margin-bottom: 2px;
+    }
+    .prob-item .mini-bar-wrap {
+      background: #eee;
+      border-radius: 999px;
+      height: 6px;
+      overflow: hidden;
+    }
+    .prob-item .mini-bar {
+      height: 100%;
+      border-radius: 999px;
+      background: #fbc02d;
+    }
+
+    /* ---------- Recipe card ---------- */
+    #recipe-card { display: none; }
+
+    .recipe-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .recipe-header .status-icon { font-size: 1.6rem; }
+    .recipe-header .status-text { font-size: 0.9rem; color: #666; }
+
+    .recipe-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .recipe-tile {
+      border: 1.5px solid #ffe082;
+      border-radius: 12px;
+      padding: 1rem;
+      background: #fffde7;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .recipe-tile:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .recipe-tile .recipe-emoji { font-size: 2rem; display: block; margin-bottom: 0.4rem; }
+    .recipe-tile .recipe-name { font-weight: 600; font-size: 0.95rem; color: #3e2723; }
+    .recipe-tile .recipe-desc { font-size: 0.82rem; color: #777; margin-top: 0.3rem; line-height: 1.4; }
+
+    .warning-box {
+      background: #ffebee;
+      border: 1.5px solid #ef9a9a;
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      color: #b71c1c;
+      font-size: 0.95rem;
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-start;
+    }
+    .warning-box .warn-icon { font-size: 1.3rem; flex-shrink: 0; }
+
+    /* ---------- Error ---------- */
+    #error-box {
+      display: none;
+      background: #ffebee;
+      border: 1.5px solid #ef9a9a;
+      border-radius: 10px;
+      padding: 0.9rem 1.2rem;
+      color: #c62828;
+      font-size: 0.9rem;
+    }
+
+    /* ---------- Footer ---------- */
+    footer {
+      margin-top: auto;
+      padding: 1.2rem;
+      font-size: 0.78rem;
+      color: #aaa;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span>🍌</span>
+  <h1>Banana Ripeness Identifier &amp; Recipe Suggester</h1>
+</header>
+
+<main>
+
+  <!-- Upload card -->
+  <div class="card">
+    <h2>Upload a Banana Image</h2>
+
+    <div id="drop-zone" role="button" tabindex="0" aria-label="Upload image">
+      <div class="icon">🍌</div>
+      <strong>Click to browse or drag &amp; drop an image here</strong>
+      <p>JPEG · PNG · WebP · BMP</p>
+    </div>
+    <input type="file" id="file-input" accept="image/*" />
+
+    <div id="preview-wrap">
+      <img id="preview-img" src="" alt="Preview" />
+      <br />
+      <button id="clear-btn">✕ Remove image</button>
+    </div>
+
+    <div class="controls">
+      <label for="model-select">Model:</label>
+      <select id="model-select">
+        <option value="efficientnet">EfficientNetB0 (most accurate)</option>
+        <option value="mobilenet">MobileNetV3-Large</option>
+        <option value="resnet">ResNet50</option>
+      </select>
+      <button id="analyse-btn" disabled>Analyse 🍌</button>
+    </div>
+
+    <div id="error-box"></div>
+    <div id="spinner"></div>
+  </div>
+
+  <!-- Result card -->
+  <div class="card" id="result-card">
+    <h2>Ripeness Result</h2>
+    <div id="badge-wrap"></div>
+    <div class="confidence-row">
+      <span style="font-size:0.9rem;color:#555;">Confidence</span>
+      <div class="confidence-bar-wrap">
+        <div class="confidence-bar" id="conf-bar" style="width:0%"></div>
+      </div>
+      <span class="confidence-label" id="conf-label"></span>
+    </div>
+    <details>
+      <summary>Show all class probabilities</summary>
+      <div class="prob-grid" id="prob-grid"></div>
+    </details>
+  </div>
+
+  <!-- Recipe card -->
+  <div class="card" id="recipe-card">
+    <h2>Recipe Suggestions</h2>
+    <div id="recipe-header-wrap"></div>
+    <div id="recipe-content"></div>
+  </div>
+
+</main>
+
+<footer>Banana Ripeness Classification API · PyTorch · EfficientNetB0 / MobileNetV3 / ResNet50</footer>
+
+<script>
+  // -----------------------------------------------------------------------
+  // Recipe data  (keyed by CLASS_NAMES from the API)
+  // -----------------------------------------------------------------------
+  const RIPENESS_META = {
+    freshripe: {
+      label: "Fresh Ripe",
+      emoji: "🍌",
+      status: "Perfect for eating right now!",
+      statusIcon: "✅",
+      edible: true,
+      recipes: [
+        { emoji: "🥤", name: "Banana Smoothie",       desc: "Blend with milk, honey and a pinch of cinnamon for a creamy treat." },
+        { emoji: "🍞", name: "Banana on Toast",        desc: "Slice over sourdough toast with peanut butter and chia seeds." },
+        { emoji: "🥣", name: "Banana Yoghurt Bowl",    desc: "Top Greek yoghurt with banana slices, granola and honey." },
+        { emoji: "🥞", name: "Banana Oatmeal",         desc: "Stir sliced banana into warm oats with a drizzle of maple syrup." },
+      ],
+    },
+    freshunripe: {
+      label: "Fresh Unripe",
+      emoji: "🟢",
+      status: "Let it ripen 1–2 more days for peak sweetness, or use in savoury dishes.",
+      statusIcon: "⏳",
+      edible: true,
+      recipes: [
+        { emoji: "🍛", name: "Green Banana Curry",     desc: "Simmer firm banana pieces in coconut milk with curry leaves and spices." },
+        { emoji: "🥔", name: "Banana Chips",           desc: "Slice thinly, season with salt and turmeric, bake or air-fry until crisp." },
+        { emoji: "🥗", name: "Raw Banana Stir-Fry",    desc: "Sauté chunks with mustard seeds, green chilli and grated coconut." },
+        { emoji: "🍜", name: "Green Banana Porridge",  desc: "Boil and mash with coconut milk for a nutritious savoury porridge." },
+      ],
+    },
+    ripe: {
+      label: "Ripe",
+      emoji: "💛",
+      status: "Great flavour — ideal for most recipes.",
+      statusIcon: "✅",
+      edible: true,
+      recipes: [
+        { emoji: "🥤", name: "Banana Smoothie",        desc: "Blend with frozen berries, almond milk and a scoop of protein powder." },
+        { emoji: "🍨", name: "Banana Split",           desc: "Halve the banana, top with three scoops of ice cream and hot fudge." },
+        { emoji: "🍮", name: "Banana Pudding",         desc: "Layer sliced banana with vanilla custard and crushed biscuits." },
+        { emoji: "🍌", name: "Caramelised Banana",     desc: "Pan-fry in butter and brown sugar for 3 min; serve with ice cream." },
+      ],
+    },
+    overripe: {
+      label: "Overripe",
+      emoji: "🟤",
+      status: "Very sweet — perfect for baking and frozen desserts.",
+      statusIcon: "✅",
+      edible: true,
+      recipes: [
+        { emoji: "🍞", name: "Banana Bread",           desc: "Classic moist loaf with walnuts and a swirl of Nutella. Bake at 180 °C." },
+        { emoji: "🧁", name: "Banana Muffins",         desc: "Quick muffins with chocolate chips — ready in 25 minutes." },
+        { emoji: "🥞", name: "Banana Pancakes",        desc: "Mix mashed banana, eggs and oats for fluffy 3-ingredient pancakes." },
+        { emoji: "🍦", name: "Banana Ice Cream",       desc: "Blend frozen overripe banana chunks for a one-ingredient nice-cream." },
+      ],
+    },
+    rotten: {
+      label: "Rotten",
+      emoji: "❌",
+      status: "Not safe to eat. Please discard or compost.",
+      statusIcon: "🚫",
+      edible: false,
+      recipes: [],
+    },
+    unripe: {
+      label: "Unripe",
+      emoji: "🌿",
+      status: "Too firm and starchy to eat raw — allow to ripen 2–3 more days, or use in cooked dishes.",
+      statusIcon: "⏳",
+      edible: true,
+      recipes: [
+        { emoji: "🥔", name: "Banana Chips",           desc: "Thinly slice, toss in oil and salt, bake at 160 °C until golden." },
+        { emoji: "🍛", name: "Raw Banana Sabzi",       desc: "Indian stir-fry with cumin, turmeric, coriander and dried mango powder." },
+        { emoji: "🥘", name: "Plantain-style Fry",     desc: "Cut into rounds, shallow-fry until golden and season with chilli salt." },
+        { emoji: "🫕", name: "Banana Flower Stew",     desc: "Simmer unripe banana in a light coconut and tomato stew." },
+      ],
+    },
+  };
+
+  // -----------------------------------------------------------------------
+  // DOM refs
+  // -----------------------------------------------------------------------
+  const dropZone    = document.getElementById('drop-zone');
+  const fileInput   = document.getElementById('file-input');
+  const previewWrap = document.getElementById('preview-wrap');
+  const previewImg  = document.getElementById('preview-img');
+  const clearBtn    = document.getElementById('clear-btn');
+  const modelSelect = document.getElementById('model-select');
+  const analyseBtn  = document.getElementById('analyse-btn');
+  const errorBox    = document.getElementById('error-box');
+  const spinner     = document.getElementById('spinner');
+  const resultCard  = document.getElementById('result-card');
+  const badgeWrap   = document.getElementById('badge-wrap');
+  const confBar     = document.getElementById('conf-bar');
+  const confLabel   = document.getElementById('conf-label');
+  const probGrid    = document.getElementById('prob-grid');
+  const recipeCard  = document.getElementById('recipe-card');
+  const recipeHeaderWrap = document.getElementById('recipe-header-wrap');
+  const recipeContent    = document.getElementById('recipe-content');
+
+  let selectedFile = null;
+
+  // -----------------------------------------------------------------------
+  // File selection helpers
+  // -----------------------------------------------------------------------
+  function setFile(file) {
+    if (!file || !file.type.startsWith('image/')) {
+      showError('Please select a valid image file.');
+      return;
+    }
+    selectedFile = file;
+    const url = URL.createObjectURL(file);
+    previewImg.src = url;
+    previewWrap.style.display = 'block';
+    dropZone.style.display = 'none';
+    analyseBtn.disabled = false;
+    hideError();
+    resetResults();
+  }
+
+  function clearFile() {
+    selectedFile = null;
+    previewImg.src = '';
+    previewWrap.style.display = 'none';
+    dropZone.style.display = '';
+    analyseBtn.disabled = true;
+    resetResults();
+    hideError();
+  }
+
+  function resetResults() {
+    resultCard.style.display = 'none';
+    recipeCard.style.display = 'none';
+  }
+
+  // -----------------------------------------------------------------------
+  // Error helpers
+  // -----------------------------------------------------------------------
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.style.display = 'block';
+  }
+  function hideError() {
+    errorBox.style.display = 'none';
+    errorBox.textContent = '';
+  }
+
+  // -----------------------------------------------------------------------
+  // Event listeners – upload
+  // -----------------------------------------------------------------------
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) setFile(file);
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setFile(fileInput.files[0]);
+    fileInput.value = '';          // allow re-selecting the same file
+  });
+
+  clearBtn.addEventListener('click', clearFile);
+
+  // -----------------------------------------------------------------------
+  // Analyse
+  // -----------------------------------------------------------------------
+  analyseBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    hideError();
+    resetResults();
+
+    analyseBtn.disabled = true;
+    spinner.style.display = 'block';
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    const model = modelSelect.value;
+
+    try {
+      const res = await fetch(`/predict?model=${encodeURIComponent(model)}`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        let detail = res.statusText;
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const err = await res.json().catch(() => ({}));
+          detail = err.detail || detail;
+        }
+        throw new Error(detail);
+      }
+
+      const data = await res.json();
+      renderResult(data);
+      renderRecipes(data.predicted_class);
+    } catch (err) {
+      showError('Error: ' + err.message);
+    } finally {
+      spinner.style.display = 'none';
+      analyseBtn.disabled = false;
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Render result
+  // -----------------------------------------------------------------------
+  function renderResult(data) {
+    const meta = RIPENESS_META[data.predicted_class] || {
+      label: data.predicted_class,
+      emoji: '🍌',
+    };
+    const pct = Math.round(data.confidence * 100);
+
+    // Badge
+    badgeWrap.innerHTML = `
+      <div class="ripeness-badge badge-${data.predicted_class}">
+        <span>${meta.emoji}</span>
+        <span>${meta.label}</span>
+      </div>`;
+
+    // Confidence bar
+    confBar.style.width = pct + '%';
+    confLabel.textContent = pct + '%';
+
+    // Probability grid
+    probGrid.innerHTML = Object.entries(data.class_probabilities)
+      .sort(([, a], [, b]) => b - a)
+      .map(([cls, prob]) => {
+        const p = Math.round(prob * 10000) / 100;
+        const m = RIPENESS_META[cls] || { emoji: '🍌', label: cls };
+        return `<div class="prob-item">
+          <div class="prob-label">
+            <span>${m.emoji} ${m.label || cls}</span>
+            <span>${p.toFixed(2)}%</span>
+          </div>
+          <div class="mini-bar-wrap">
+            <div class="mini-bar" style="width:${p}%"></div>
+          </div>
+        </div>`;
+      }).join('');
+
+    resultCard.style.display = '';
+  }
+
+  // -----------------------------------------------------------------------
+  // Render recipes
+  // -----------------------------------------------------------------------
+  function renderRecipes(predictedClass) {
+    const meta = RIPENESS_META[predictedClass];
+    if (!meta) return;
+
+    // Header
+    recipeHeaderWrap.innerHTML = `
+      <div class="recipe-header">
+        <span class="status-icon">${meta.statusIcon}</span>
+        <span class="status-text">${meta.status}</span>
+      </div>`;
+
+    if (!meta.edible) {
+      recipeContent.innerHTML = `
+        <div class="warning-box">
+          <span class="warn-icon">⚠️</span>
+          <div>
+            This banana is <strong>not suitable for consumption</strong>.
+            Discard it safely or add it to your compost bin to return nutrients to the soil.
+          </div>
+        </div>`;
+    } else {
+      recipeContent.innerHTML = `
+        <div class="recipe-grid">
+          ${meta.recipes.map(r => `
+            <div class="recipe-tile">
+              <span class="recipe-emoji">${r.emoji}</span>
+              <div class="recipe-name">${r.name}</div>
+              <div class="recipe-desc">${r.desc}</div>
+            </div>`).join('')}
+        </div>`;
+    }
+
+    recipeCard.style.display = '';
+  }
+</script>
+</body>
+</html>

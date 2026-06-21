@@ -1,0 +1,16 @@
+# Downloaded model weights (large binary files – use download_models.py)
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
